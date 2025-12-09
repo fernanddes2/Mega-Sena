@@ -1,0 +1,5 @@
+{
+  "name": "Garimpo Mega-Sena",
+  "description": "An advanced lottery analysis and simulation tool. Generate your own games, run large-scale Monte Carlo simulations to understand probabilities, and analyze results compared to official statistics, all within a sleek and responsive interface.",
+  "requestFramePermissions": []
+}
