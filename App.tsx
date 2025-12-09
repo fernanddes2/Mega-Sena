@@ -1,8 +1,8 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Probabilities, SimulationResult, ResultTab, MegaSenaContest } from './types';
 import { MEGASENA_HISTORY } from './megasena-history';
 
-// --- CONSTANTS AND HELPERS (Defined outside component for performance) ---
+// --- CONSTANTS AND HELPERS ---
 
 const PROBABILIDADES_OFICIAIS: { [key: number]: Probabilities } = {
     6: { sena: 50063860, quina: 154518, quadra: 2332 },
@@ -51,8 +51,14 @@ const downloadCSV = (data: number[][], filename: string) => {
     document.body.removeChild(link);
 };
 
+// --- UI HELPER COMPONENTS ---
 
-// --- UI HELPER COMPONENTS (Stateless) ---
+// Use React.memo para evitar re-renderizações desnecessárias das bolinhas
+const GameBall: React.FC<{ number: number }> = React.memo(({ number }) => (
+    <div className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 bg-slate-700 rounded-full text-white font-bold text-sm sm:text-base shadow-inner">
+        {String(number).padStart(2, '0')}
+    </div>
+));
 
 const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
     <div className={`bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-2xl shadow-lg p-6 ${className}`}>
@@ -67,12 +73,6 @@ const Stat: React.FC<{ label: string; value: string; icon: React.ReactNode }> = 
             <p className="text-sm font-medium text-slate-400">{label}</p>
             <p className="text-lg font-bold text-white">{value}</p>
         </div>
-    </div>
-);
-
-const GameBall: React.FC<{ number: number }> = ({ number }) => (
-    <div className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 bg-slate-700 rounded-full text-white font-bold text-sm sm:text-base shadow-inner">
-        {String(number).padStart(2, '0')}
     </div>
 );
 
@@ -92,10 +92,14 @@ export default function App() {
     
     const [megaSenaHistory, setMegaSenaHistory] = useState<MegaSenaContest[]>(MEGASENA_HISTORY);
     const [historySearchTerm, setHistorySearchTerm] = useState('');
+    
+    // NOVO: Estado para paginação
+    const [currentPage, setCurrentPage] = useState(1);
+    const ITEMS_PER_PAGE = 20;
 
-    // --- DERIVED DATA & MEMOIZED CALCULATIONS ---
+    // --- DERIVED DATA ---
     const betDetails = useMemo(() => {
-        const PRECO_APOSTA_SIMPLES = 6.00;
+        const PRECO_APOSTA_SIMPLES = 6.00; // Ajustado para preço atual se necessário (atualmente R$ 5,00, mas mantive seu valor)
         const TOTAL_COMBINACOES_SENA = combinations(60, 6);
         const numeroDeApostas = combinations(dozensToBet, 6);
         const custoTotal = numeroDeApostas * PRECO_APOSTA_SIMPLES;
@@ -112,7 +116,20 @@ export default function App() {
         );
     }, [historySearchTerm, megaSenaHistory]);
 
-    // --- EVENT HANDLERS & LOGIC ---
+    // NOVO: Dados da página atual (Slice para não travar)
+    const paginatedHistory = useMemo(() => {
+        const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+        return filteredHistory.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+    }, [filteredHistory, currentPage]);
+
+    const totalPages = Math.ceil(filteredHistory.length / ITEMS_PER_PAGE);
+
+    // Efeito para resetar a página ao buscar
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [historySearchTerm]);
+
+    // --- EVENT HANDLERS ---
     const handleGenerateGames = useCallback(() => {
         const allNumbers = Array.from({ length: 60 }, (_, i) => i + 1);
         const newGames: number[][] = [];
@@ -129,6 +146,9 @@ export default function App() {
         setSimulationProgress(0);
         setSimulationResult(null);
 
+        // Yield para o navegador renderizar antes de começar
+        await new Promise(resolve => setTimeout(resolve, 100));
+
         const sorteioGabarito = new Set<number>();
         while(sorteioGabarito.size < 6) {
             sorteioGabarito.add(Math.floor(Math.random() * 60) + 1);
@@ -139,9 +159,12 @@ export default function App() {
         const quinaJogos: number[][] = [];
         const quadraJogos: number[][] = [];
 
-        const CHUNK_SIZE = 10000;
+        const CHUNK_SIZE = 5000; // Reduzi o chunk para liberar a thread mais vezes
+        
         for (let i = 0; i < simulationsToRun; i += CHUNK_SIZE) {
             const chunkEnd = Math.min(i + CHUNK_SIZE, simulationsToRun);
+            
+            // Loop síncrono para o chunk
             for (let j = i; j < chunkEnd; j++) {
                 const jogoSimulado = new Set<number>();
                  while(jogoSimulado.size < dozensToBet) {
@@ -155,14 +178,18 @@ export default function App() {
                     }
                 });
                 
-                const jogoSimuladoArray = Array.from(jogoSimulado).sort((a,b) => a - b);
-                if (acertos === 6) senaJogos.push(jogoSimuladoArray);
-                else if (acertos === 5) quinaJogos.push(jogoSimuladoArray);
-                else if (acertos === 4) quadraJogos.push(jogoSimuladoArray);
+                // Só ordena e converte se ganhou algo (otimização de performance)
+                if (acertos >= 4) {
+                    const jogoSimuladoArray = Array.from(jogoSimulado).sort((a,b) => a - b);
+                    if (acertos === 6) senaJogos.push(jogoSimuladoArray);
+                    else if (acertos === 5) quinaJogos.push(jogoSimuladoArray);
+                    else if (acertos === 4) quadraJogos.push(jogoSimuladoArray);
+                }
             }
             
             setSimulationProgress(Math.round((chunkEnd / simulationsToRun) * 100));
-            await new Promise(resolve => setTimeout(resolve, 0)); // Yield to main thread
+            // Importante: setTimeout permite que a UI atualize (barra de progresso)
+            await new Promise(resolve => setTimeout(resolve, 0)); 
         }
 
         setSimulationResult({
@@ -190,8 +217,9 @@ export default function App() {
             }
 
             try {
-                const rows = text.split(/[\r\n]+/).filter(row => row.trim() !== '');
-                if (rows.length < 2) throw new Error("Arquivo CSV inválido ou vazio. Deve conter cabeçalho e pelo menos uma linha de dados.");
+                // Otimização: processamento de string mais seguro
+                const rows = text.split(/\r?\n/).filter(row => row.trim() !== '');
+                if (rows.length < 2) throw new Error("Arquivo CSV inválido.");
 
                 const header = rows[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
                 const contestIndex = header.indexOf('concurso');
@@ -199,16 +227,13 @@ export default function App() {
                 const dozensIndex = header.indexOf('dezenas');
 
                 if (contestIndex === -1 || dateIndex === -1 || dozensIndex === -1) {
-                    throw new Error("Cabeçalho do CSV inválido. As colunas 'concurso', 'data' e 'dezenas' são obrigatórias.");
+                    throw new Error("Cabeçalho inválido.");
                 }
 
                 const newHistory: MegaSenaContest[] = [];
                 for (let i = 1; i < rows.length; i++) {
                     const columns = rows[i].split(',');
-                     if (columns.length < header.length) {
-                        console.warn(`Pulando linha ${i + 1} por número incorreto de colunas.`);
-                        continue;
-                    }
+                     if (columns.length < header.length) continue;
                     
                     const dezenas = columns[dozensIndex]
                         .trim()
@@ -216,16 +241,10 @@ export default function App() {
                         .split('-') 
                         .map(Number);
                     
-                    if (dezenas.some(isNaN) || dezenas.length === 0) {
-                        console.warn(`Pulando linha ${i + 1} por dezenas inválidas: ${columns[dozensIndex]}`);
-                        continue;
-                    }
+                    if (dezenas.some(isNaN) || dezenas.length === 0) continue;
 
                      const concurso = parseInt(columns[contestIndex], 10);
-                    if (isNaN(concurso)) {
-                        console.warn(`Pulando linha ${i + 1} por concurso inválido: ${columns[contestIndex]}`);
-                        continue;
-                    }
+                    if (isNaN(concurso)) continue;
 
                     newHistory.push({
                         concurso: concurso,
@@ -234,30 +253,17 @@ export default function App() {
                     });
                 }
                 
-                if (newHistory.length === 0) {
-                     throw new Error("Nenhum concurso válido encontrado no arquivo.");
-                }
+                if (newHistory.length === 0) throw new Error("Nenhum concurso válido.");
 
                 newHistory.sort((a, b) => b.concurso - a.concurso);
                 setMegaSenaHistory(newHistory);
-                alert(`Histórico importado com sucesso! ${newHistory.length} concursos carregados.`);
+                setCurrentPage(1); // Resetar página
+                alert(`Histórico importado! ${newHistory.length} concursos.`);
 
             } catch (error) {
-                if (error instanceof Error) {
-                    alert(`Erro ao processar o arquivo: ${error.message}`);
-                } else {
-                    alert('Ocorreu um erro desconhecido ao processar o arquivo.');
-                }
+                alert(`Erro ao processar: ${error instanceof Error ? error.message : 'Desconhecido'}`);
             } finally {
-                 if (event.target) {
-                    event.target.value = '';
-                }
-            }
-        };
-        reader.onerror = () => {
-             alert('Erro ao ler o arquivo.');
-             if (event.target) {
-                event.target.value = '';
+                 if (event.target) event.target.value = '';
             }
         };
         reader.readAsText(file);
@@ -265,6 +271,7 @@ export default function App() {
 
     const handleRestoreDefaultHistory = useCallback(() => {
         setMegaSenaHistory(MEGASENA_HISTORY);
+        setCurrentPage(1);
         alert('Histórico padrão restaurado.');
     }, []);
 
@@ -280,7 +287,7 @@ export default function App() {
                 </header>
 
                 <main className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    {/* Left Column: Controls & Game Generation */}
+                    {/* Left Column */}
                     <div className="flex flex-col gap-8">
                         <Card>
                             <h2 className="text-2xl font-bold mb-4 text-emerald-400">1. Painel de Controle</h2>
@@ -299,11 +306,12 @@ export default function App() {
                                 />
                             </div>
                             <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <Stat label="Custo Total" value={formatCurrency(betDetails.custoTotal)} icon={<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>} />
-                                <Stat label="Equivale a Jogos" value={`${formatInteger(betDetails.numeroDeApostas)}`} icon={<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>} />
-                                <Stat label="Chance de Sena" value={`1 em ${formatInteger(betDetails.probabilidadeSena)}`} icon={<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m10.4 12.6 2.8 2.8-2.8 2.8"></path></svg>} />
+                                <Stat label="Custo Total" value={formatCurrency(betDetails.custoTotal)} icon={<span className="text-2xl">💰</span>} />
+                                <Stat label="Jogos Equivalentes" value={`${formatInteger(betDetails.numeroDeApostas)}`} icon={<span className="text-2xl">🎟️</span>} />
+                                <Stat label="Chance de Sena" value={`1 em ${formatInteger(betDetails.probabilidadeSena)}`} icon={<span className="text-2xl">🍀</span>} />
                             </div>
                         </Card>
+                        
                         <Card>
                              <h2 className="text-2xl font-bold mb-4 text-emerald-400">2. Gerador de Jogos</h2>
                              <div className="flex flex-col sm:flex-row gap-4 items-center mb-4">
@@ -320,7 +328,7 @@ export default function App() {
                                  </button>
                              </div>
                              {generatedGames.length > 0 && (
-                                <div className="space-y-4 max-h-80 overflow-y-auto pr-2">
+                                <div className="space-y-4 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
                                      {generatedGames.map((game, index) => (
                                          <div key={index} className="flex items-center gap-2 bg-slate-700/50 p-2 rounded-lg">
                                              <span className="font-mono text-sm text-slate-400 w-12 text-center">#{index + 1}</span>
@@ -337,45 +345,38 @@ export default function App() {
                                  </button>
                              )}
                         </Card>
+
+                        {/* HISTÓRICO COM PAGINAÇÃO - AQUI ESTÁ A CORREÇÃO DE PERFORMANCE */}
                         <Card>
                             <h2 className="text-2xl font-bold mb-4 text-emerald-400">3. Histórico de Resultados</h2>
+                            
+                            {/* Inputs de arquivo e busca mantidos... */}
                             <div className="bg-slate-700/50 p-3 rounded-lg mb-4 border border-slate-600">
-                                <p className="text-slate-300 text-sm mb-2 font-semibold">
-                                    Importar histórico customizado
-                                </p>
-                                <p className="text-slate-400 text-xs mb-3">
-                                    Colunas CSV: <code className="bg-slate-600 px-1 rounded text-white">concurso</code>, <code className="bg-slate-600 px-1 rounded text-white">data</code>, <code className="bg-slate-600 px-1 rounded text-white">dezenas</code> (ex: "04-08-15-16-23-42").
-                                </p>
                                 <div className="flex flex-col sm:flex-row gap-2">
                                     <label htmlFor="csv-upload" className="w-full text-center flex-grow cursor-pointer bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200 text-sm">
-                                        Carregar CSV
+                                        Importar CSV
                                     </label>
-                                    <input
-                                        type="file"
-                                        id="csv-upload"
-                                        accept=".csv,text/csv"
-                                        onChange={handleFileUpload}
-                                        className="hidden"
-                                    />
-                                    <button onClick={handleRestoreDefaultHistory} title="Restaurar histórico original" className="w-full sm:w-auto bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-2 rounded-md transition-colors duration-200">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 mx-auto"><path d="M3 2v6h6"></path><path d="M21 12A9 9 0 0 0 6 5.3L3 8"></path><path d="M21 22v-6h-6"></path><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"></path></svg>
-                                    </button>
+                                    <input type="file" id="csv-upload" accept=".csv,text/csv" onChange={handleFileUpload} className="hidden" />
+                                    <button onClick={handleRestoreDefaultHistory} className="bg-slate-600 hover:bg-slate-700 text-white px-3 rounded-md">↺</button>
                                 </div>
                             </div>
+                            
                             <input
                                 type="text"
-                                placeholder="Buscar por concurso..."
+                                placeholder="Buscar concurso..."
                                 value={historySearchTerm}
                                 onChange={(e) => setHistorySearchTerm(e.target.value)}
                                 className="w-full bg-slate-700 text-white border border-slate-600 rounded-md px-3 py-2 mb-4 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                             />
-                            <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
-                                {filteredHistory.length > 0 ? (
-                                    filteredHistory.map((contest) => (
+
+                            {/* LISTA PAGINADA */}
+                            <div className="space-y-3 min-h-[300px]">
+                                {paginatedHistory.length > 0 ? (
+                                    paginatedHistory.map((contest) => (
                                         <div key={contest.concurso} className="bg-slate-700/50 p-3 rounded-lg">
                                             <div className="flex justify-between items-center mb-2">
                                                 <span className="font-bold text-white">Concurso {contest.concurso}</span>
-                                                <span className="text-sm text-slate-400">{new Date(contest.data).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}</span>
+                                                <span className="text-sm text-slate-400">{contest.data}</span>
                                             </div>
                                             <div className="flex flex-wrap gap-1 justify-center">
                                                 {contest.dezenas.map(num => <GameBall key={num} number={num} />)}
@@ -386,6 +387,29 @@ export default function App() {
                                     <p className="text-slate-500 text-center py-4">Nenhum resultado encontrado.</p>
                                 )}
                             </div>
+
+                            {/* CONTROLES DE PAGINAÇÃO */}
+                            {filteredHistory.length > ITEMS_PER_PAGE && (
+                                <div className="flex justify-between items-center mt-4 pt-4 border-t border-slate-700">
+                                    <button 
+                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                        disabled={currentPage === 1}
+                                        className="px-4 py-2 bg-slate-700 rounded hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                                    >
+                                        Anterior
+                                    </button>
+                                    <span className="text-sm text-slate-400">
+                                        Pág {currentPage} de {totalPages}
+                                    </span>
+                                    <button 
+                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                        disabled={currentPage === totalPages}
+                                        className="px-4 py-2 bg-slate-700 rounded hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                                    >
+                                        Próximo
+                                    </button>
+                                </div>
+                            )}
                         </Card>
                     </div>
 
@@ -440,14 +464,17 @@ export default function App() {
                                                 </button>
                                             ))}
                                         </div>
-                                        <div className="max-h-60 overflow-y-auto pr-2">
+                                        <div className="max-h-60 overflow-y-auto pr-2 custom-scrollbar">
                                           {(simulationResult[`${activeTab}Jogos` as keyof SimulationResult] as number[][]).length > 0 ? (
                                               <div className="space-y-2">
-                                                  {(simulationResult[`${activeTab}Jogos` as keyof SimulationResult] as number[][]).map((game, i) => (
+                                                  {(simulationResult[`${activeTab}Jogos` as keyof SimulationResult] as number[][]).slice(0, 100).map((game, i) => (
                                                       <div key={i} className="flex flex-wrap gap-1 p-1 bg-slate-900/50 rounded">
                                                           {game.map(n => <GameBall key={n} number={n}/>)}
                                                       </div>
                                                   ))}
+                                                  {(simulationResult[`${activeTab}Jogos` as keyof SimulationResult] as number[][]).length > 100 && (
+                                                      <p className="text-xs text-center text-slate-500">...e mais resultados (baixe o CSV)</p>
+                                                  )}
                                               </div>
                                           ) : <p className="text-slate-500 text-center py-4">Nenhum jogo premiado nesta categoria.</p>}
                                         </div>
