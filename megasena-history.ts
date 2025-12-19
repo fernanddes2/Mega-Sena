@@ -2953,5 +2953,6 @@ export const MEGASENA_HISTORY: MegaSenaContest[] = [
 {"concurso": 2949, "data": "2025-12-09", "dezenas": [4, 6, 11, 38, 49, 54]},
 {"concurso": 2950, "data": "2025-12-11", "dezenas": [21, 23, 42, 49, 50, 60]},
 {"concurso": 2951, "data": "2025-12-13", "dezenas": [5, 8, 30, 31, 37, 45]},
-{"concurso": 2952, "data": "2025-12-16", "dezenas": [1, 20, 45, 48, 51, 58]}
+{"concurso": 2952, "data": "2025-12-16", "dezenas": [1, 20, 45, 48, 51, 58]},
+{"concurso": 2953, "data": "2025-12-18", "dezenas": [5, 10, 24, 25, 47, 54]}
 ].sort((a, b) => b.concurso - a.concurso);
